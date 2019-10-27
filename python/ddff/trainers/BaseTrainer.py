@@ -3,6 +3,8 @@
 import os
 import torch
 from torch import optim
+from tensorboardX import SummaryWriter
+summary = SummaryWriter()
 
 class BaseTrainer:
     def __init__(self, model, optimizer, training_loss, deterministic, scheduler=None, supervised=True):
@@ -124,7 +126,12 @@ class BaseTrainer:
                 if i % print_frequency == print_frequency-1:    # print every print_frequency mini-batches
                     print('[%d, %5d] loss: ' %
                       (epoch + 1, i + 1) + str(running_loss / print_frequency))
+                    summary.add_scalar('loss/running_loss'+str(epoch+1), (running_loss / print_frequency), i + 1)
                     running_loss = 0.0
+
+                # if (i-1 == len(dataloader)):
+                #     summary.add_images('output/' + str(epoch + 1), (running_loss / print_frequency), i + 1)
+
 
             #Save checkpoint
             if checkpoint_file is not None and epoch % checkpoint_frequency == checkpoint_frequency-1:
@@ -132,6 +139,7 @@ class BaseTrainer:
 
             #Save loss of epoch
             epoch_losses += [epoch_loss/len(dataloader)]
+            # summary.add_scalar('loss/epoch_losses', epoch_losses, epoch + 1)
 
             #Update learning rate based on defined schedule
             if self.scheduler is not None:

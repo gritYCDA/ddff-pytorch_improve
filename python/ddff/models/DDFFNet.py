@@ -6,9 +6,10 @@ import torch
 import numpy as np
 
 class DDFFNet(nn.Module):
-    def __init__(self, focal_stack_size, output_dims=1, cc1_enabled=False, cc2_enabled=False, cc3_enabled=True, cc4_enabled=False, cc5_enabled=False, bias=False, pretrained='no_bn'):
+    def __init__(self, focal_stack_size, output_dims=1, inter_frame_learn=True, cc1_enabled=False, cc2_enabled=False, cc3_enabled=True, cc4_enabled=False, cc5_enabled=False, bias=False, pretrained='no_bn'):
         super(DDFFNet, self).__init__()
-        self.autoencoder = DDFFAutoEncoder(output_dims, cc1_enabled, cc2_enabled, cc3_enabled, cc4_enabled, cc5_enabled, bias=bias)
+        self.inter_frame_learn = inter_frame_learn
+        self.autoencoder = DDFFAutoEncoder(output_dims, inter_frame_learn, cc1_enabled, cc2_enabled, cc3_enabled, cc4_enabled, cc5_enabled, bias=bias)
         self.scoring = nn.Conv2d(focal_stack_size*output_dims, output_dims, 1, bias=False)
         #Init weights
         self.apply(self.weights_init)
@@ -46,10 +47,18 @@ class DDFFNet(nn.Module):
 
     def forward(self, images):
         #Encode stacks in batch dimension and calculate features
+        # image([2, 10, 3, 224, 224]) => images.view(-1, *images.shape[2:])[20, 3, 224, 224]
         image_features = self.autoencoder(images.view(-1, *images.shape[2:]))
+
+        if self.inter_frame_learn:
+            return image_features
+
         #Encode stacks in feature dimension again
+        # image_features([20, 1, 224, 224])  => [2, 10, 224, 224]
         image_features = image_features.view(images.shape[0], -1, *image_features.shape[2:])
-        #Score extracted features
+
+        #Score extracted features -> extract max focus measure
+        # result([2, 1, 224, 224])
         result = self.scoring(image_features)
 
         return result
@@ -180,10 +189,11 @@ class DDFFNet(nn.Module):
 
 class DDFFAutoEncoder(nn.Module):
     """Create model from VGG_16 by deleting the classifier layer."""
-    def __init__(self, output_dims, cc1_enabled, cc2_enabled, cc3_enabled, cc4_enabled, cc5_enabled, bias=False):
+    def __init__(self, output_dims, inter_frame_learn, cc1_enabled, cc2_enabled, cc3_enabled, cc4_enabled, cc5_enabled, bias=False):
         super(DDFFAutoEncoder, self).__init__()
         #Save parameters
         self.output_dims = output_dims
+        self.inter_frame_learn = inter_frame_learn
         self.cc1_enabled = cc1_enabled
         self.cc2_enabled = cc2_enabled
         self.cc3_enabled = cc3_enabled
@@ -271,70 +281,98 @@ class DDFFAutoEncoder(nn.Module):
         self.conv2_2_D_bn = nn.BatchNorm2d(128, eps=0.001)
         self.conv2_1_D = nn.Conv2d(128, 64, 3, padding=1, bias=bias)
         self.conv2_1_D_bn = nn.BatchNorm2d(64, eps=0.001)
-
         self.upconv1 = nn.ConvTranspose2d(64, 64, 4, padding=1, stride=2, bias=False)
-        if self.cc1_enabled:
-            self.conv1_2_D = nn.Conv2d(128, 64, 3, padding=1, bias=bias)
+
+        if self.inter_frame_learn:
+            # self.conv1_4_in = nn.Conv2d(640, 640, 3, padding=1, bias=bias)
+            # self.conv1_4_in_bn = nn.BatchNorm2d(640, eps=0.001)
+            self.conv1_3_in = nn.Conv2d(640, 10, 3, padding=1, bias=bias)
+            self.conv1_3_in_bn = nn.BatchNorm2d(10, eps=0.001)
+            # self.conv1_2_in = nn.Conv2d(10, 10, 3, padding=1, bias=bias)
+            # self.conv1_2_in_bn = nn.BatchNorm2d(10, eps=0.001)
+            self.conv1_1_in = nn.Conv2d(10, self.output_dims, 3, padding=1, bias=bias)
+            self.conv1_1_in_bn = nn.BatchNorm2d(self.output_dims, eps=0.001)
         else:
-            self.conv1_2_D = nn.Conv2d(64, 64, 3, padding=1, bias=bias)
-        self.conv1_2_D_bn = nn.BatchNorm2d(64, eps=0.001)
-        self.conv1_1_D = nn.Conv2d(64, self.output_dims, 3, padding=1, bias=bias)
-        self.conv1_1_D_bn = nn.BatchNorm2d(self.output_dims, eps=0.001)
+            if self.cc1_enabled:
+                self.conv1_2_D = nn.Conv2d(128, 64, 3, padding=1, bias=bias)
+            else:
+                self.conv1_2_D = nn.Conv2d(64, 64, 3, padding=1, bias=bias)
+            self.conv1_2_D_bn = nn.BatchNorm2d(64, eps=0.001)
+            self.conv1_1_D = nn.Conv2d(64, self.output_dims, 3, padding=1, bias=bias)
+            self.conv1_1_D_bn = nn.BatchNorm2d(self.output_dims, eps=0.001)
+
+
 
     def forward(self, x):
+
+        # batch size = 2 and input size (224, 224)
+        # x = [20, 3, 224, 224]
         #Encoder
-        x = nn.functional.relu(self.conv1_1_bn(self.conv1_1(x)))
-        cc1 = nn.functional.relu(self.conv1_2_bn(self.conv1_2(x)))
-        x = self.pool1(cc1)
-        x = nn.functional.relu(self.conv2_1_bn(self.conv2_1(x)))
-        cc2 = nn.functional.relu(self.conv2_2_bn(self.conv2_2(x)))
-        x = self.pool2(cc2)
-        x = nn.functional.relu(self.conv3_1_bn(self.conv3_1(x)))
-        x = nn.functional.relu(self.conv3_2_bn(self.conv3_2(x)))
-        cc3 = nn.functional.relu(self.conv3_3_bn(self.conv3_3(x)))
-        x = self.pool3(cc3)
+        x = nn.functional.relu(self.conv1_1_bn(self.conv1_1(x)))    # [20, 64, 224, 224]
+        cc1 = nn.functional.relu(self.conv1_2_bn(self.conv1_2(x)))  # [20, 64, 224, 224]
+        x = self.pool1(cc1)                                         # [20, 64, 112, 112]
+        x = nn.functional.relu(self.conv2_1_bn(self.conv2_1(x)))    # [20, 128, 112, 112]
+        cc2 = nn.functional.relu(self.conv2_2_bn(self.conv2_2(x)))  # [20, 128, 112, 112]
+        x = self.pool2(cc2)                                         # [20, 128, 56, 56]
+        x = nn.functional.relu(self.conv3_1_bn(self.conv3_1(x)))    # [20, 256, 56, 56]
+        x = nn.functional.relu(self.conv3_2_bn(self.conv3_2(x)))    # [20, 256, 56, 56]
+        cc3 = nn.functional.relu(self.conv3_3_bn(self.conv3_3(x)))  # [20, 256, 56, 56]
+        x = self.pool3(cc3)                                         # [20, 256, 28, 28]
         x = self.encdrop3(x)
-        x = nn.functional.relu(self.conv4_1_bn(self.conv4_1(x)))
-        x = nn.functional.relu(self.conv4_2_bn(self.conv4_2(x)))
-        cc4 = nn.functional.relu(self.conv4_3_bn(self.conv4_3(x)))
-        x = self.pool4(cc4)
+        x = nn.functional.relu(self.conv4_1_bn(self.conv4_1(x)))    # [20, 512, 28, 28]
+        x = nn.functional.relu(self.conv4_2_bn(self.conv4_2(x)))    # [20, 512, 28, 28]
+        cc4 = nn.functional.relu(self.conv4_3_bn(self.conv4_3(x)))  # [20, 512, 28, 28]
+        x = self.pool4(cc4)                                         # [20, 512, 14, 14]
         x = self.encdrop4(x)
-        x = nn.functional.relu(self.conv5_1_bn(self.conv5_1(x)))
-        x = nn.functional.relu(self.conv5_2_bn(self.conv5_2(x)))
-        cc5 = nn.functional.relu(self.conv5_3_bn(self.conv5_3(x)))
-        x = self.pool5(cc5)
+        x = nn.functional.relu(self.conv5_1_bn(self.conv5_1(x)))    # [20, 512, 14, 14]
+        x = nn.functional.relu(self.conv5_2_bn(self.conv5_2(x)))    # [20, 512, 14, 14]
+        cc5 = nn.functional.relu(self.conv5_3_bn(self.conv5_3(x)))  # [20, 512, 14, 14]
+        x = self.pool5(cc5)                                         # [20, 512, 7, 7]
         x = self.encdrop5(x)
 
         #Decoder
-        x = self.upconv5(x)
-        if self.cc5_enabled:
+
+        # self.upconv5 = nn.ConvTranspose2d(512, 512, 4, padding=1, stride=2, bias=False)
+        x = self.upconv5(x)                                         # [20, 512, 14, 14]
+        if self.cc5_enabled:                                        # disable
             x = torch.cat([x, cc5], 1)
-        x = nn.functional.relu(self.conv5_3_D_bn(self.conv5_3_D(x)))
-        x = nn.functional.relu(self.conv5_2_D_bn(self.conv5_2_D(x)))
-        x = nn.functional.relu(self.conv5_1_D_bn(self.conv5_1_D(x)))
+        x = nn.functional.relu(self.conv5_3_D_bn(self.conv5_3_D(x)))# [20, 512, 14, 14]
+        x = nn.functional.relu(self.conv5_2_D_bn(self.conv5_2_D(x)))# [20, 512, 14, 14]
+        x = nn.functional.relu(self.conv5_1_D_bn(self.conv5_1_D(x)))# [20, 512, 14, 14]
         x = self.decdrop5(x)
-        x = self.upconv4(x)
-        if self.cc4_enabled:
+        x = self.upconv4(x)                                         # [20, 512, 28, 28]
+        if self.cc4_enabled:                                        # disable
             x = torch.cat([x, cc4], 1)
-        x = nn.functional.relu(self.conv4_3_D_bn(self.conv4_3_D(x)))
-        x = nn.functional.relu(self.conv4_2_D_bn(self.conv4_2_D(x)))
-        x = nn.functional.relu(self.conv4_1_D_bn(self.conv4_1_D(x)))
+        x = nn.functional.relu(self.conv4_3_D_bn(self.conv4_3_D(x)))# [20, 512, 28, 28]
+        x = nn.functional.relu(self.conv4_2_D_bn(self.conv4_2_D(x)))# [20, 512, 28, 28]
+        x = nn.functional.relu(self.conv4_1_D_bn(self.conv4_1_D(x)))# [20, 256, 28, 28]
         x = self.decdrop4(x)
-        x = self.upconv3(x)
+        x = self.upconv3(x)                                         # [20, 256, 56, 56]
         if self.cc3_enabled:
-            x = torch.cat([x, cc3], 1)
-        x = nn.functional.relu(self.conv3_3_D_bn(self.conv3_3_D(x)))
-        x = nn.functional.relu(self.conv3_2_D_bn(self.conv3_2_D(x)))
-        x = nn.functional.relu(self.conv3_1_D_bn(self.conv3_1_D(x)))
+            x = torch.cat([x, cc3], 1)                              # [20, 512, 56, 56]
+        x = nn.functional.relu(self.conv3_3_D_bn(self.conv3_3_D(x)))# [20, 256, 56, 56]
+        x = nn.functional.relu(self.conv3_2_D_bn(self.conv3_2_D(x)))# [20, 256, 56, 56]
+        x = nn.functional.relu(self.conv3_1_D_bn(self.conv3_1_D(x)))# [20, 128, 56, 56]
         x = self.decdrop3(x)
-        x = self.upconv2(x)
+        x = self.upconv2(x)                                         # [20, 128, 112, 112]
         if self.cc2_enabled:
             x = torch.cat([x, cc2], 1)
-        x = nn.functional.relu(self.conv2_2_D_bn(self.conv2_2_D(x)))
-        x = nn.functional.relu(self.conv2_1_D_bn(self.conv2_1_D(x)))
-        x = self.upconv1(x)
-        if self.cc1_enabled:
-            x = torch.cat([x, cc1], 1)
-        x = nn.functional.relu(self.conv1_2_D_bn(self.conv1_2_D(x)))
-        x = nn.functional.relu(self.conv1_1_D_bn(self.conv1_1_D(x)))
+        x = nn.functional.relu(self.conv2_2_D_bn(self.conv2_2_D(x)))# [20, 128, 112, 112]
+        x = nn.functional.relu(self.conv2_1_D_bn(self.conv2_1_D(x)))# [20, 64, 112, 112]
+        x = self.upconv1(x)                                         # [20, 64, 224, 224]
+
+        if self.inter_frame_learn:
+            # x([20, 64, 224, 224])  => [2, 640, 224, 224]
+            x = x.view(-1, 640, *x.shape[2:])
+            # x = nn.functional.relu(self.conv1_4_in_bn(self.conv1_4_in(x)))
+            x = nn.functional.relu(self.conv1_3_in_bn(self.conv1_3_in(x)))
+            # x = nn.functional.relu(self.conv1_2_in_bn(self.conv1_2_in(x)))
+            x = nn.functional.relu(self.conv1_1_in_bn(self.conv1_1_in(x)))
+        else:
+            if self.cc1_enabled:
+                x = torch.cat([x, cc1], 1)
+            x = nn.functional.relu(self.conv1_2_D_bn(self.conv1_2_D(x)))# [20, 64, 224, 224]
+            x = nn.functional.relu(self.conv1_1_D_bn(self.conv1_1_D(x)))# [20, 1, 224, 224]
+
+        #Q: return x to DDFFNet.forward()
         return x

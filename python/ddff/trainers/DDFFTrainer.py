@@ -13,6 +13,7 @@ from ddff.trainers.BaseTrainer import BaseTrainer
 
 class DDFFTrainer(BaseTrainer):
     def __init__(self, stack_size, learning_rate=0.001, cliprange=[0.0202, 0.2825],
+                        inter_frame_learn=True,
                         cc1_enabled=False,
                         cc2_enabled=False,
                         cc3_enabled=True,
@@ -25,7 +26,7 @@ class DDFFTrainer(BaseTrainer):
                         optimizer='sgd',
                         normalize_loss=False):
         #Define model
-        net = DDFFNet.DDFFNet(stack_size, cc1_enabled=cc1_enabled, cc2_enabled=cc2_enabled, cc3_enabled=cc3_enabled, cc4_enabled=cc4_enabled, cc5_enabled=cc5_enabled, pretrained=pretrained)
+        net = DDFFNet.DDFFNet(stack_size, inter_frame_learn=inter_frame_learn , cc1_enabled=cc1_enabled, cc2_enabled=cc2_enabled, cc3_enabled=cc3_enabled, cc4_enabled=cc4_enabled, cc5_enabled=cc5_enabled, pretrained=pretrained)
         #Define optimizer
         if optimizer == 'sgd':
             opt = self.create_optimizer(net, {"algorithm":'sgd', "learning_rate":learning_rate,  "weight_decay": 0.0005, "momentum":0.9})
@@ -40,8 +41,9 @@ class DDFFTrainer(BaseTrainer):
         super(DDFFTrainer, self).__init__(net, opt, training_loss, deterministic, scheduler=scheduler)
 
     @classmethod
-    def from_h5_data(cls,root_dir,
+    def from_h5_data(cls, root_dir,
                         learning_rate=0.001,
+                        inter_frame_learn=True,
                         cc1_enabled=False,
                         cc2_enabled=False,
                         cc3_enabled=True,
@@ -62,7 +64,7 @@ class DDFFTrainer(BaseTrainer):
                         batch_size=2,
                         num_workers=4,
                         checkpoint_file=None,
-                        checkpoint_frequency=50):
+                        checkpoint_frequency=5):
         #Create data loaders
         transform_train = cls.__create_preprocessing(cls, crop_size=training_crop_size, mean=normalize_mean, std=normalize_std)
         transform_validation = cls.__create_preprocessing(cls, crop_size=validation_crop_size, mean=normalize_mean, std=normalize_std)
@@ -74,6 +76,7 @@ class DDFFTrainer(BaseTrainer):
         dataloader_validation = DataLoader(dataset_validation, batch_size=1, shuffle=True, num_workers=0)
         #Call constructor
         instance = cls(dataset_train.get_stack_size(), learning_rate=learning_rate,
+                       inter_frame_learn=True,
                         cc1_enabled=cc1_enabled,
                         cc2_enabled=cc2_enabled,
                         cc3_enabled=cc3_enabled,
@@ -99,6 +102,7 @@ class DDFFTrainer(BaseTrainer):
 
         #Fit instance
         epoch_losses = instance.train(dataloader_train, epochs, checkpoint_file=checkpoint_file, checkpoint_frequency=checkpoint_frequency, max_gradient=max_gradient)
+        print("print loss time")
         print("Losses per epoch: " + str(epoch_losses))
 
         return instance

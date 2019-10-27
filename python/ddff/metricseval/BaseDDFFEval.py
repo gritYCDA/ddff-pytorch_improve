@@ -2,21 +2,34 @@
 
 import numpy as np
 import torch
+from torchvision.utils import save_image
 import skimage.filters as skf
+import pdb
+from tensorboardX import SummaryWriter
 
 class BaseDDFFEval:
     def __init__(self, trainer):
         self.trainer = trainer
 
     def evaluate(self, dataloader, accthrs = [1.25, 1.25**2, 1.25**3], image_size=(383,552)):
+        writer = SummaryWriter()
         avgmetrics = np.zeros((1, 7+len(accthrs)), dtype=float)
         for i, data in enumerate(dataloader):
+            # pdb.set_trace()
             inputs, output = data["input"], data["output"]
-            if torch.cuda.is_available():
-                    inputs = inputs.cuda()
-            output_approx = self.trainer.evaluate(inputs)
-            metrics = self.__calmetrics(output_approx.permute(0,2,3,1).squeeze().data.cpu().numpy()[:image_size[0],:image_size[1]], output.permute(0,2,3,1).squeeze().numpy()[:image_size[0],:image_size[1]], 1.0, accthrs, bumpinessclip=0.05, ignore_zero=True)
-            avgmetrics += metrics
+            with torch.no_grad():
+                if torch.cuda.is_available():
+                        inputs = inputs.cuda()
+
+                output_approx = self.trainer.evaluate(inputs)
+                # writer.add_image('testt/graundTruth', output.squeeze(0), i)
+                # writer.add_image('testt/output', output_apx.squeeze(0), i)
+                if(i >= 0 and i < 50):
+                    save_image(output_approx, "step2-2_sample/output"+str(i)+".png")
+                    save_image(output, "step2-2_sample/GT"+str(i)+".png")
+
+                metrics = self.__calmetrics(output_approx.permute(0,2,3,1).squeeze().data.cpu().numpy()[:image_size[0],:image_size[1]], output.permute(0,2,3,1).squeeze().numpy()[:image_size[0],:image_size[1]], 1.0, accthrs, bumpinessclip=0.05, ignore_zero=True)
+                avgmetrics += metrics
         return avgmetrics/len(dataloader)
 
     # Metrics calculation provided by Caner Hazirbas

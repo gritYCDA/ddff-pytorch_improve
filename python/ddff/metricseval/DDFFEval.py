@@ -21,6 +21,7 @@ class DDFFEval(BaseDDFFEval):
                             FocalStackDDFFH5Reader.FocalStackDDFFH5Reader.PadSamples(test_pad_size), 
                             FocalStackDDFFH5Reader.FocalStackDDFFH5Reader.Normalize(mean_input=[0.485, 0.456, 0.406], std_input=[0.229, 0.224, 0.225])]
         transform_test = torchvision.transforms.Compose(transform_test)
+
         #Create dataloader
         datareader = FocalStackDDFFH5Reader.FocalStackDDFFH5Reader(filename_testset, transform=transform_test, stack_key=stack_key, disp_key=disp_key)
         dataloader = DataLoader(datareader, batch_size=1, shuffle=False, num_workers=0)

@@ -2,9 +2,10 @@
 
 import os
 import numpy as np
+import torch
 from torch.utils.data import Dataset
 import torchvision
-import torch
+import torchvision.transforms as T
 import h5py
 
 class FocalStackDDFFH5Reader(Dataset):
@@ -28,26 +29,37 @@ class FocalStackDDFFH5Reader(Dataset):
 
     def __getitem__(self, idx):
         #Create sample dict
-        sample = {'input': self.hdf5[self.stack_key][idx].astype(float), 'output': self.hdf5[self.disp_key][idx]}
-
+        import pdb
+        # pdb.set_trace()
+        sample = {'input': self.hdf5[self.stack_key][idx].astype(np.uint8), 'output': self.hdf5[self.disp_key][idx]}
+        # pdb.set_trace()
         #Transform sample with data augmentation transformers
         if self.transform:
             sample = self.transform(sample)
-
         return sample
 
     def get_stack_size(self):
         return self.__getitem__(0)['input'].shape[0]
 
+    def get_raw_input(self):
+        for i in range(50):
+            for j in range(10):
+                torchvision.utils.save_image(torch.from_numpy(self.__getitem__(i)['input'][j].transpose(2,0,1)), "step2-2_sample/input_"+str(i)+"_"+str(j)+".png")
+
     class ToTensor(object):
         """Convert ndarrays in sample to Tensors."""
+
+        def __init__(self):
+            self.ToTensor = T.ToTensor()
+
         def __call__(self, sample):
             #Add color dimension to depth map
             sample['output'] = np.expand_dims(sample['output'], axis=0)
             # swap color axis because
             # numpy image: H x W x C
             # torch image: C X H X W
-            sample['input'] = torch.from_numpy(sample['input'].transpose((0,3,1,2))).float()
+            #sample['input'] = torch.from_numpy(sample['input'].transpose((0,3,1,2))).float()
+            sample['input'] = torch.stack([self.ToTensor(sample_image) for sample_image in sample['input']])
             sample['output'] = torch.from_numpy(sample['output']).float()
             return sample
 
@@ -64,6 +76,7 @@ class FocalStackDDFFH5Reader(Dataset):
                 output_image = sample['output']
             else:
                 output_image = torchvision.transforms.functional.normalize(sample['output'], mean=self.mean_output, std=self.std_output)
+
             return {'input': input_images, 'output': output_image}
 
     class ClipGroundTruth(object):
